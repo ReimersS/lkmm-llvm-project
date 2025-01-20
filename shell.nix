@@ -8,7 +8,7 @@ let
     pyyaml
     pygments
   ]);
-  pkgs-unstable = import <nixpkgs-unstable> {};
+  pkgs-unstable = import <nixpkgs> {};
 in
 pkgs.llvmPackages_latest.stdenv.mkDerivation {
   name = "llvm-debug-env";
