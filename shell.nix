@@ -21,6 +21,7 @@ pkgs.llvmPackages_latest.stdenv.mkDerivation {
     pkgs.graphviz
     myPython
     pkgs.llvmPackages_latest.lld
+    pkgs.llvmPackages_latest.libllvm
     pkgs.llvmPackages_latest.lldb
     pkgs.pkg-config
     pkgs-unstable.clang-tools_16
