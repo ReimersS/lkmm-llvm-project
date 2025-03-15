@@ -28,6 +28,7 @@ MODULE_ANALYSIS("verify", VerifierAnalysis())
 MODULE_ANALYSIS("pass-instrumentation", PassInstrumentationAnalysis(PIC))
 MODULE_ANALYSIS("inline-advisor", InlineAdvisorAnalysis())
 MODULE_ANALYSIS("ir-similarity", IRSimilarityAnalysis())
+MODULE_ANALYSIS("lkmm-annotate-deps", LKMMAnnotateDepsPass())
 
 #ifndef MODULE_ALIAS_ANALYSIS
 #define MODULE_ALIAS_ANALYSIS(NAME, CREATE_PASS)                               \
@@ -127,8 +128,9 @@ MODULE_PASS("sanmd-module", SanitizerBinaryMetadataPass())
 MODULE_PASS("memprof-module", ModuleMemProfilerPass())
 MODULE_PASS("poison-checking", PoisonCheckingPass())
 MODULE_PASS("pseudo-probe-update", PseudoProbeUpdatePass())
-MODULE_PASS("lkmm-annotate-deps", LKMMAnnotateDepsPass())
 MODULE_PASS("lkmm-verify-deps", LKMMVerifyDepsPass())
+MODULE_PASS("lkmm-hook-deps", LKMMAnnotateHook())
+MODULE_PASS("lkmm-break-deps", LKMMBreakingPass())
 #undef MODULE_PASS
 
 #ifndef MODULE_PASS_WITH_PARAMS

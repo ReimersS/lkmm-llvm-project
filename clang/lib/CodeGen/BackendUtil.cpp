@@ -990,12 +990,12 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
       if (CodeGenOpts.OptimizationLevel == 0) {
         PB.registerPipelineStartEPCallback(
             [](ModulePassManager &MPM, OptimizationLevel Level) {
-              MPM.addPass(LKMMAnnotateDepsPass());
+              MPM.addPass(LKMMAnnotateHook());
             });
       } else {
         PB.registerPipelineStartEPCallback(
             [](ModulePassManager &MPM, OptimizationLevel Level) {
-              MPM.addPass(LKMMAnnotateDepsPass());
+              MPM.addPass(LKMMAnnotateHook());
             });
         PB.registerOptimizerLastEPCallback(
             [](ModulePassManager &MPM, OptimizationLevel Level) {
