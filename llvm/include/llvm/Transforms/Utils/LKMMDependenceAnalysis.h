@@ -18,6 +18,7 @@
 #include <optional>
 #include <type_traits>
 #include <unordered_set>
+#include <set>
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -27,6 +28,7 @@
 #define LLVM_TRANSFORMS_UTILS_LKMMDEPENDENCEANALYSIS_H
 
 namespace llvm {
+  class LKMMAnnotateDeps;
 
 //===----------------------------------------------------------------------===//
 // Some common types
@@ -51,19 +53,20 @@ enum class DCLevel { PTR, PTE, BOTH, NORET, EMPTY };
 
 class DCLinkBase {
 public:
-  DCLinkBase(const DebugLoc *Loc, DCLevel Lvl, int Depth = 0)
+  DCLinkBase(DILocation *Loc, DCLevel Lvl, int Depth)
       : Loc(Loc), Lvl(Lvl), Depth(Depth) {}
 
+  //DCLinkBase(const DCLinkBase &Other) : Loc(Other.Loc), Lvl(Other.Lvl), Depth(Other.Depth) {}
   virtual ~DCLinkBase() = default;
 
-  const DebugLoc *Loc;
+  DebugLoc Loc;
   DCLevel Lvl;
-  
+
   bool isCall() const;
   bool isRet() const;
-  
+
   void addDepth(int Delta) { Depth += Delta; }
-  int getDepth() const { return (Depth > 0) ? Depth : 0; }
+  int getDepth() const { return Depth; }
 
   virtual bool operator==(const DCLinkBase &Other) const = 0;
 
@@ -71,32 +74,95 @@ protected:
   int Depth;
 };
 
+/// Represents a dependency chain (segment). A dep chain consists of a beginning, an
+/// ending, and a unique chain of links between them.
+///
+/// We use the names "dependency chain" and "chain segment" interchangeably.
 template <typename Context>
-struct DC;
+struct DC {
+  DC() {};
 
-template <int B, int E>
+  template <typename T>
+  DC<Context>(const DC<T> &Other) = delete;
+
+  DC(const DC &A, const DC &B, int Delta) = delete;
+
+  void addLink(const typename Context::DCLink &Link, std::optional<int> Arg = std::nullopt);
+
+  void addLink(Instruction *Val, DCLevel Lvl, std::optional<int> Arg = std::nullopt) = delete;
+
+  // Links between (including) the beginning and the ending.
+  // In reverse order; from the end to the beginning.
+  std::vector<typename Context::DCLink> Chain;
+
+  // Both segments begin in a call inst;
+  // may dangle: we tracked up to the value of this call in F
+  // rises: we tracked up to the begining of F and stored one specific call site (likely not in F)
+  bool mayDangle() {
+    return Chain.back().isCall() && !ArgB;
+  }
+  bool rises() {
+    return Chain.back().isCall() && ArgB;
+  }
+
+  // Segment ends in a call
+  // ArgE must have a value
+  bool mayRise() {
+    return Chain.front().isCall();
+  }
+
+  // Segment ends in a return
+  bool dangles() {
+    return Chain.front().isRet();
+  }
+
+  // Chain does not begin or end in the function.
+  // The escaping arguments must be annotated.
+  std::optional<int> ArgB;
+  std::optional<int> ArgE;
+
+  bool operator==(const DC &Other) const {
+    return Chain == Other.Chain && ArgB == Other.ArgB && ArgE == Other.ArgE;
+  }
+
+  class DCHash {
+  public:
+    std::size_t operator()(const DC &DC) const noexcept {
+      return hash_combine(std::hash<decltype(DC.Chain)>{}(DC.Chain), DC.ArgB.value_or(0), DC.ArgE.value_or(0));
+    }
+  };
+};
+
+
+template <int B, int E, typename C>
 class SegmentID {
-  // For each segment we need to store: 
+  // For each segment we need to store:
   // the Pair, the Function, the Arg numbers,
 public:
-  template<typename T>
-  SegmentID(DC<T> &Dc) : Begin(Dc.Chain.back().Loc), End(Dc.Chain.front().Loc) {
+  SegmentID(DC<C> &Dc) : Dc(Dc) {
 
     // Will throw if we messed up
     if constexpr (B == -1) {
-      ArgB = Dc.ArgB.value();
+      assert(Dc.ArgB.has_value());
     }
     if constexpr (E == 1) {
-      ArgE = Dc.ArgE.value();
+      assert(Dc.ArgE.has_value());
     }
   }
 
-  SegmentID(const SegmentID &Other)
-    : Begin(Other.Begin), End(Other.End), ArgB(Other.ArgB), ArgE(Other.ArgE) {}
+  template<typename O>
+  SegmentID(const SegmentID<B,E,O> &Other) : Dc(Other.getDC()) {}
 
-  /// Returns true if [*this*, Other] is a valid segment.   
+  //SegmentID(SegmentID<B,E,C> &Other) : Dc(Other.getDC()) {}
+
+  //SegmentID& operator=(const SegmentID<B,E,C> &Other) { Dc = Other.getDC(); return *this; }
+
+  template<int M>
+  SegmentID(SegmentID<B,M,C> &Beg, SegmentID<-M,E,C> &End) : Dc(Beg.getDC(), End.getDC(), M) {}
+
+  /// Returns true if [*this*, Other] is a valid segment.
   template<int BO, int EO>
-  bool isCompatible(const SegmentID<BO,EO> &Other) const {
+  bool isCompatible(const SegmentID<BO,EO,C> &Other) const {
     // Segments must match at function boundaries
     if constexpr (E == 0 | BO == 0)
       return false;
@@ -107,55 +173,76 @@ public:
 
     // MR/R meet at call instructions, arguments must match
     if constexpr (E == 1) {
-      if (ArgE != Other.getArgB())
+      if (this->getArgE() != Other.getArgB())
         return false;
-      
-      return *End == *Other.getBegin();
+
+      return this->getEnd() == Other.getBegin();
     }
 
     // D/MD meet at return instructions
     if constexpr (E == -1) {
-      return *End == *Other.getBegin();
+      return this->getEnd() == Other.getBegin();
     }
 
     llvm_unreachable("Invalid segment combination");
   }
 
-  // TODO: C++20
-  bool operator==(const SegmentID &Other) const {
-    return Begin == Other.Begin && End == Other.End &&
-           ArgB == Other.ArgB && ArgE == Other.ArgE;
+  // To sort
+  // (1) Lex. by filename
+  // (2) by earliest end loc
+  // (3) by earliest beg loc
+  // Since we search bottom up, the annotator will insert the segments in roughly this order
+  bool operator<(const SegmentID &Other) const {
+
+    auto *LScope = cast<DIScope>(this->getEnd()->getScope());
+    auto *RScope = cast<DIScope>(Other.getEnd()->getScope());
+    if(LScope->getFilename() != RScope->getFilename())
+      return LScope->getFilename() < RScope->getFilename();
+
+    if(this->getEnd().getLine() != Other.getEnd().getLine())
+      return this->getEnd().getLine() < Other.getEnd().getLine();
+
+    if(this->getEnd().getCol() != Other.getEnd().getCol())
+      return this->getEnd().getCol() < Other.getEnd().getCol();
+
+    if(this->getBegin().getLine() != Other.getBegin().getLine())
+      return this->getBegin().getLine() < Other.getBegin().getLine();
+
+    if(this->getBegin().getCol() != Other.getBegin().getCol())
+      return this->getBegin().getCol() < Other.getBegin().getCol();
+
+    return false;
   }
 
-  class SegmentIDHash {
-  public:
-    std::size_t operator()(const SegmentID &ID) const noexcept {
-      // probably good enough
-      return
-        std::hash<unsigned int>{}(ID.Begin->getCol()) ^
-        std::hash<unsigned int>{}(ID.Begin->getLine()) ^
-        std::hash<unsigned int>{}(ID.End->getCol() << 4) ^
-        std::hash<unsigned int>{}(ID.End->getLine() << 4);
-    }
-  };
+  bool operator==(const SegmentID &Other) const {
+    return !(*this < Other) && !(Other < *this);
+  }
 
+
+  // To remove duplicates
+  static bool equal(const SegmentID &LHS, const SegmentID &RHS) {
+    return LHS == RHS && LHS.Dc == RHS.Dc;
+  }
+
+  void setStr(const std::string &Str) { Pretty = Str; }
+  void print() { errs() << Pretty << "\n\n"; };
 
   // TODO: string_view?
   const std::string &getType() const { return Type; }
-  const DebugLoc *getBegin() const { return Begin; }
-  const DebugLoc *getEnd() const { return End; }
-  const std::optional<int> getArgB() const { return ArgB; }
-  const std::optional<int> getArgE() const { return ArgE; }
+  const DebugLoc getBegin() const { return Dc.Chain.back().Loc; }
+  const DebugLoc getEnd() const { return Dc.Chain.front().Loc; }
+  std::optional<int> getArgB() const { return Dc.ArgB; }
+  std::optional<int> getArgE() const { return Dc.ArgE; }
   constexpr int getB() const { return B; }
   constexpr int getE() const { return E; }
   constexpr int delta() { return E - B; }
 
+  const DC<C> &getDC() const { return Dc; }
   static const std::string Type;
+  std::string Pretty;
+
 private:
-  const DebugLoc *Begin;
-  const DebugLoc *End;
-  std::optional<int> ArgB;
-  std::optional<int> ArgE; 
+  DC<C> Dc;
 };
 
 //===----------------------------------------------------------------------===//
@@ -179,6 +266,22 @@ std::string getInstLocString(Instruction *I, bool ViaFile = false);
 
 std::string getInstLocString(const StringRef &F ,const DebugLoc &InstDebugLoc, bool ViaFile = false);
 
+/// _Sorts_ and removes duplicates from the given vector of segments.
+template<int B, int E, typename C>
+void removeDuplicates(std::vector<SegmentID<B, E, C>> &Segments);
+
+/// \returns the last non-EMPTY lvl in a \p Chain.
+///
+/// \param Chain the _non-empty_ chain to search.
+template <typename C>
+DCLevel getLastNonEmptyLvl(std::vector<C> &Chain) {
+  for (auto It = Chain.rbegin(); It != Chain.rend(); ++It) {
+    if (It->Lvl != DCLevel::EMPTY)
+      return It->Lvl;
+  }
+  llvm_unreachable("Chain is empty, no non-EMPTY level found");
+}
+
 //===----------------------------------------------------------------------===//
 // The Dependency Analysis
 //===----------------------------------------------------------------------===//
@@ -187,38 +290,29 @@ class LKMMAnnotateDeps {
 
 public:
   using DC = DC<LKMMAnnotateDeps>;
-  LKMMAnnotateDeps(const ArrayRef<DC> &Deps) : IntactDeps(Deps) {}
-  
+  using DepMap = std::vector<SegmentID<0,0, LKMMAnnotateDeps>>;
+
+  LKMMAnnotateDeps(DepMap *Deps ) : IntactDeps(Deps) {}
+
   enum DCLinkType { VALUE, CALL, RETURN };
   class DCLink;
 
-  ArrayRef<DC> IntactDeps;
+  DepMap *IntactDeps;
+
+  // never invalidate this
+  bool invalidate(Module &, const PreservedAnalyses &PA,
+                  ModuleAnalysisManager::Invalidator &);
 };
 
 //===----------------------------------------------------------------------===//
-// The Actual Annotation Pass
+// The IR search
 //===----------------------------------------------------------------------===//
-
-class LKMMAnnotateDepsPass : public AnalysisInfoMixin<LKMMAnnotateDepsPass> {
+class LKMMSearchPolicy {
 public:
-  static AnalysisKey Key;
-  friend AnalysisInfoMixin<LKMMAnnotateDepsPass>;
+  using DC = DC<LKMMSearchPolicy>;
 
-  using DC = DC<LKMMAnnotateDepsPass>;
-  typedef LKMMAnnotateDeps Result;
-  Result run(Module &M, ModuleAnalysisManager &AM);
-
-  class DCLink;
-  class AnnotCtx;
-  class LKMMAnnotator;
-
-private:
   template<int B, int E>
-  using DepMap = std::unordered_map<
-    SegmentID<B,E>,
-    std::unordered_set<std::unique_ptr<DC>>,
-    typename SegmentID<B,E>::SegmentIDHash
-  >;
+  using DepMap = std::vector<SegmentID<B,E, LKMMSearchPolicy>>;
 
   typedef DepMap<0,0> IntactDeps_t;
   typedef DepMap<-1,0> RisingDeps_t;
@@ -230,9 +324,28 @@ private:
   typedef DepMap<-1,1> MayRiseRisingDeps_t;
   typedef DepMap<1,1> MayRiseMayDangleDeps_t;
 
-  std::unique_ptr<llvm::DC<LKMMAnnotateDeps> *> DCs;
+  //std::unique_ptr<llvm::DC<LKMMAnnotateDeps> *> DCs;
+  class DCLink;
+  class AnnotCtx;
+  class LKMMAnnotator;
 };
 
+//===----------------------------------------------------------------------===//
+// The Actual Annotation Pass
+//===----------------------------------------------------------------------===//
+
+class LKMMAnnotateDepsPass : public AnalysisInfoMixin<LKMMAnnotateDepsPass> {
+public:
+  static AnalysisKey Key;
+  friend AnalysisInfoMixin<LKMMAnnotateDepsPass>;
+
+  typedef LKMMAnnotateDeps Result;
+  Result run(Module &M, ModuleAnalysisManager &AM);
+
+private:
+  LKMMSearchPolicy Policy;
+  static void annotateChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result = nullptr);
+};
 
 //===----------------------------------------------------------------------===//
 // The Hook Pass
@@ -245,22 +358,26 @@ public:
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
 
+    errs() << "\nvvvvv~~~~~~~~~ LKMMAnnotateHook ~~~~~vvvvv\n";
     auto &Annotations = AM.getResult<LKMMAnnotateDepsPass>(M);
+    errs() << "\n^^^^^~~~~~~~~~ LKMMAnnotateHook ~~~~~^^^^^\n";
     return PreservedAnalyses::all();
   }
 };
-  
+
 //===----------------------------------------------------------------------===//
 // The Verification Pass
 //===----------------------------------------------------------------------===//
 
 class LKMMVerifyDepsPass : public PassInfoMixin<LKMMVerifyDepsPass> {
 public:
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
-    
-    auto &Annotations = AM.getResult<LKMMAnnotateDepsPass>(M);
-    return PreservedAnalyses::all();
-  };
+  typedef LKMMAnnotateDeps Result;
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+
+private:
+  LKMMSearchPolicy Policy;
+  void verifyChain(LKMMAnnotateDeps::DepMap *Pre, LKMMAnnotateDeps::DepMap *Post);
+  static void addChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result);
 };
 
 } // namespace llvm
