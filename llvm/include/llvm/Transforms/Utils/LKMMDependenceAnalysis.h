@@ -16,9 +16,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <type_traits>
 #include <unordered_set>
-#include <set>
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -50,6 +50,12 @@ namespace llvm {
 ///
 /// EMPTY -> Empty.
 enum class DCLevel { PTR, PTE, BOTH, NORET, EMPTY };
+
+enum Reason { COMPLETE, EXTERN, OVERWRITE, DOUBLE_MEM };
+
+enum DepType { ADDR, DATA, CTRL };
+
+enum CtxKind { CK_Annot, CK_Ver };
 
 class DCLinkBase {
 public:
@@ -87,9 +93,11 @@ struct DC {
 
   DC(const DC &A, const DC &B, int Delta) = delete;
 
-  void addLink(const typename Context::DCLink &Link, std::optional<int> Arg = std::nullopt);
+  bool addLink(const typename Context::DCLink &Link, std::optional<int> Arg = std::nullopt);
 
-  void addLink(Instruction *Val, DCLevel Lvl, std::optional<int> Arg = std::nullopt) = delete;
+  bool addLink(Instruction *Val, DCLevel Lvl, std::optional<int> Arg = std::nullopt) = delete;
+
+  bool insertLink(Instruction *Val, DCLevel Lvl, std::optional<int> Arg = std::nullopt) = delete;
 
   // Links between (including) the beginning and the ending.
   // In reverse order; from the end to the beginning.
@@ -121,8 +129,32 @@ struct DC {
   std::optional<int> ArgB;
   std::optional<int> ArgE;
 
+  bool operator<(const DC &Other) const {
+
+    if (Chain.size() != Other.Chain.size())
+      return Chain.size() < Other.Chain.size();
+
+    for (size_t i = 0; i < Chain.size(); i++) {
+      const auto &L = Chain[i];
+      const auto &R = Other.Chain[i];
+
+      if (L.Loc.getLine() != R.Loc.getLine())
+        return L.Loc.getLine() < R.Loc.getLine();
+      if (L.Loc.getCol() != R.Loc.getCol())
+        return L.Loc.getCol() < R.Loc.getCol();
+    }
+
+    if (ArgB != Other.ArgB)
+      return ArgB < Other.ArgB;
+
+    if (ArgE != Other.ArgE)
+      return ArgE < Other.ArgE;
+
+    return false; // equal
+  }
+
   bool operator==(const DC &Other) const {
-    return Chain == Other.Chain && ArgB == Other.ArgB && ArgE == Other.ArgE;
+    return !(*this < Other) && !(Other < *this);
   }
 
   class DCHash {
@@ -133,6 +165,20 @@ struct DC {
   };
 };
 
+template <int B, int E>
+struct SegmentType {
+  static constexpr std::string_view Type;
+};
+
+template<> constexpr std::string_view SegmentType<0, 0>::Type = "Intact";
+template<> constexpr std::string_view SegmentType<-1, 0>::Type = "Rising";
+template<> constexpr std::string_view SegmentType<1, 0>::Type = "May Dangle";
+template<> constexpr std::string_view SegmentType<0, -1>::Type = "Dangling";
+template<> constexpr std::string_view SegmentType<-1, -1>::Type = "Rising & Dangling";
+template<> constexpr std::string_view SegmentType<1, -1>::Type = "May Dangle & Dangling";
+template<> constexpr std::string_view SegmentType<0, 1>::Type = "May Rise";
+template<> constexpr std::string_view SegmentType<-1, 1>::Type = "May Rise & Rising";
+template<> constexpr std::string_view SegmentType<1, 1>::Type = "May Rise & May Dangle";
 
 template <int B, int E, typename C>
 class SegmentID {
@@ -151,7 +197,7 @@ public:
   }
 
   template<typename O>
-  SegmentID(const SegmentID<B,E,O> &Other) : Dc(Other.getDC()) {}
+  SegmentID(const SegmentID<B,E,O> &Other) : Pretty(Other.Pretty), Dc(Other.getDC()) {}
 
   //SegmentID(SegmentID<B,E,C> &Other) : Dc(Other.getDC()) {}
 
@@ -193,23 +239,50 @@ public:
   // (3) by earliest beg loc
   // Since we search bottom up, the annotator will insert the segments in roughly this order
   bool operator<(const SegmentID &Other) const {
+    auto LEnd = this->getEnd();
+    auto REnd = Other.getEnd();
 
-    auto *LScope = cast<DIScope>(this->getEnd()->getScope());
-    auto *RScope = cast<DIScope>(Other.getEnd()->getScope());
-    if(LScope->getFilename() != RScope->getFilename())
-      return LScope->getFilename() < RScope->getFilename();
+    if (LEnd != REnd) {
+      if (!LEnd)
+        return true;
+      if (!REnd)
+        return false;
 
-    if(this->getEnd().getLine() != Other.getEnd().getLine())
-      return this->getEnd().getLine() < Other.getEnd().getLine();
+      auto *LScope = cast_or_null<DIScope>(LEnd->getScope());
+      auto *RScope = cast_or_null<DIScope>(REnd->getScope());
 
-    if(this->getEnd().getCol() != Other.getEnd().getCol())
-      return this->getEnd().getCol() < Other.getEnd().getCol();
+      if (LScope != RScope) {
+        if (!LScope)
+          return true;
+        if (!RScope)
+          return false;
 
-    if(this->getBegin().getLine() != Other.getBegin().getLine())
-      return this->getBegin().getLine() < Other.getBegin().getLine();
+        if (LScope->getFilename() != RScope->getFilename())
+          return LScope->getFilename() < RScope->getFilename();
+      }
 
-    if(this->getBegin().getCol() != Other.getBegin().getCol())
-      return this->getBegin().getCol() < Other.getBegin().getCol();
+      if (LEnd.getLine() != REnd.getLine())
+        return LEnd.getLine() < REnd.getLine();
+
+      if (LEnd.getCol() != REnd.getCol())
+        return LEnd.getCol() < REnd.getCol();
+    }
+
+    auto LBegin = this->getBegin();
+    auto RBegin = Other.getBegin();
+
+    if (LBegin != RBegin) {
+      if (!LBegin)
+        return true;
+      if (!RBegin)
+        return false;
+
+      if (LBegin.getLine() != RBegin.getLine())
+        return LBegin.getLine() < RBegin.getLine();
+
+      if (LBegin.getCol() != RBegin.getCol())
+        return LBegin.getCol() < RBegin.getCol();
+    }
 
     return false;
   }
@@ -221,14 +294,25 @@ public:
 
   // To remove duplicates
   static bool equal(const SegmentID &LHS, const SegmentID &RHS) {
-    return LHS == RHS && LHS.Dc == RHS.Dc;
+    if (LHS == RHS)
+      return LHS.Dc == RHS.Dc;
+    return false;
   }
 
+  static bool lt(const SegmentID &LHS, const SegmentID &RHS) {
+    if (LHS < RHS)
+      return true;
+    //if (RHS < LHS)
+    //  return false;
+    return LHS.Dc < RHS.Dc;
+  }
+
+  void makePretty();
   void setStr(const std::string &Str) { Pretty = Str; }
   void print() { errs() << Pretty << "\n\n"; };
 
   // TODO: string_view?
-  const std::string &getType() const { return Type; }
+  const std::string_view &getType() const { return Type; }
   const DebugLoc getBegin() const { return Dc.Chain.back().Loc; }
   const DebugLoc getEnd() const { return Dc.Chain.front().Loc; }
   std::optional<int> getArgB() const { return Dc.ArgB; }
@@ -238,7 +322,7 @@ public:
   constexpr int delta() { return E - B; }
 
   const DC<C> &getDC() const { return Dc; }
-  static const std::string Type;
+  static constexpr std::string_view Type = SegmentType<B, E>::Type;
   std::string Pretty;
 
 private:
@@ -279,7 +363,9 @@ DCLevel getLastNonEmptyLvl(std::vector<C> &Chain) {
     if (It->Lvl != DCLevel::EMPTY)
       return It->Lvl;
   }
-  llvm_unreachable("Chain is empty, no non-EMPTY level found");
+
+  //llvm_unreachable("Chain is empty, no non-EMPTY level found");
+  return DCLevel::EMPTY; //FIXME
 }
 
 //===----------------------------------------------------------------------===//
@@ -292,16 +378,16 @@ public:
   using DC = DC<LKMMAnnotateDeps>;
   using DepMap = std::vector<SegmentID<0,0, LKMMAnnotateDeps>>;
 
-  LKMMAnnotateDeps(DepMap *Deps ) : IntactDeps(Deps) {}
-
   enum DCLinkType { VALUE, CALL, RETURN };
   class DCLink;
 
-  DepMap *IntactDeps;
+  DepMap *IntactDeps[3];
 
   // never invalidate this
   bool invalidate(Module &, const PreservedAnalyses &PA,
                   ModuleAnalysisManager::Invalidator &);
+
+  void add(DepType DT, DepMap *Result) { IntactDeps[(int)DT] = Result; };
 };
 
 //===----------------------------------------------------------------------===//
@@ -326,7 +412,10 @@ public:
 
   //std::unique_ptr<llvm::DC<LKMMAnnotateDeps> *> DCs;
   class DCLink;
+
+  template<DepType DT>
   class AnnotCtx;
+
   class LKMMAnnotator;
 };
 
@@ -344,7 +433,7 @@ public:
 
 private:
   LKMMSearchPolicy Policy;
-  static void annotateChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result = nullptr);
+  static void annotateChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType DT, LKMMAnnotateDeps::DepMap *Result = nullptr);
 };
 
 //===----------------------------------------------------------------------===//
@@ -376,8 +465,8 @@ public:
 
 private:
   LKMMSearchPolicy Policy;
-  void verifyChain(LKMMAnnotateDeps::DepMap *Pre, LKMMAnnotateDeps::DepMap *Post);
-  static void addChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result);
+  void verifyChain(LKMMAnnotateDeps::DepMap *Pre, LKMMAnnotateDeps::DepMap *Post, Module &M);
+  static void addChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType DT, LKMMAnnotateDeps::DepMap *Result);
 };
 
 } // namespace llvm

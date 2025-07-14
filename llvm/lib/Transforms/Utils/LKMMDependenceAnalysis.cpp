@@ -23,6 +23,7 @@
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -47,6 +48,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 
+#define DEBUG_TYPE "lkmm-dep-analyzer"
+
 // This list is complete and will never change
 #define FOR_EACH_DEP(DO) \
   DO(Intact) \
@@ -58,6 +61,100 @@
   DO(MayRise) \
   DO(MayRiseRising) \
   DO(MayRiseMayDangle)
+
+#define FOR_EACH_DP(DO)\
+  if (I) { DO(I) } \
+  if (R) { DO(R) } \
+  if (MD) { DO(MD) } \
+  if (D) { DO(D) } \
+  if (RD) { DO(RD) } \
+  if (MDD) { DO(MDD) } \
+  if (MR) { DO(MR) } \
+  if (MRR) { DO(MRR) } \
+  if (MRMD) { DO(MRMD) }
+
+#define MK_COUNTS(NAME) \
+  static llvm::TrackingStatistic Num##NAME[3][2][2] = { \
+    { \
+      { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "0", "[ADDR]["#NAME"] pre-opt count -- duplicate"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "1", "[ADDR]["#NAME"] pre-opt count -- unique") \
+      }, { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "2", "[ADDR]["#NAME"] post-opt count -- dublicate"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "3", "[ADDR]["#NAME"] post-opt count -- unique") \
+      } \
+    }, { \
+      { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "4", "[DATA]["#NAME"] pre-opt count -- duplicate"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "5", "[DATA]["#NAME"] pre-opt count -- unique") \
+      }, { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "6", "[DATA]["#NAME"] post-opt count -- dublicate"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "7", "[DATA]["#NAME"] post-opt count -- unique") \
+      } \
+    }, { \
+      { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "8", "[CTRL]["#NAME"] pre-opt count -- duplicate"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "9", "[CTRL]["#NAME"] pre-opt count -- unique") \
+      }, { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "10", "[CTRL]["#NAME"] post-opt count -- dublicate"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Num" #NAME "11", "[CTRL]["#NAME"] post-opt count -- unique") \
+      } \
+    } \
+  };
+
+FOR_EACH_DEP(MK_COUNTS)
+MK_COUNTS(Combined)
+
+#define NumI NumIntact
+#define NumR NumRising
+#define NumMD NumMayDangle
+#define NumD NumDangling
+#define NumRD NumRisingDangling
+#define NumMDD NumMayDangleDangling
+#define NumMR NumMayRise
+#define NumMRR NumMayRiseRising
+#define NumMRMD NumMayRiseMayDangle
+
+#define MK_STATS(NAME) \
+  static llvm::TrackingStatistic Stat##NAME[3][2][3]= { \
+    { \
+      { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "0", "[ADDR]["#NAME"] pre-opt length -- min"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "1", "[ADDR]["#NAME"] pre-opt length -- max"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "2", "[ADDR]["#NAME"] pre-opt length -- avg") \
+      }, { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "3", "[ADDR]["#NAME"] post-opt length -- min"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "4", "[ADDR]["#NAME"] post-opt length -- max"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "5", "[ADDR]["#NAME"] post-opt length -- avg") \
+      } \
+    }, { \
+      { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "6", "[DATA]["#NAME"] pre-opt length -- min"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "7", "[DATA]["#NAME"] pre-opt length -- max"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "8", "[DATA]["#NAME"] pre-opt length -- avg") \
+      }, { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "9", "[DATA]["#NAME"] post-opt length -- min"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "10", "[DATA]["#NAME"] post-opt length -- max"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "11", "[DATA]["#NAME"] post-opt length -- avg") \
+      } \
+    }, { \
+      { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "12", "[CTRL]["#NAME"] pre-opt length -- min"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "13", "[CTRL]["#NAME"] pre-opt length -- max"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "14", "[CTRL]["#NAME"] pre-opt length -- avg") \
+      }, { \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "15", "[CTRL]["#NAME"] post-opt length -- min"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "16", "[CTRL]["#NAME"] post-opt length -- max"), \
+        llvm::TrackingStatistic(DEBUG_TYPE, "Stat" #NAME "17", "[CTRL]["#NAME"] post-opt length -- avg") \
+      } \
+    } \
+  };
+
+MK_STATS(Combined)
+
+static int OutFD[2] = {2, 2};
+
+static const std::string Prefix = "LKMM-Out/";
 
 namespace llvm {
 
@@ -89,9 +186,87 @@ std::string getInstLocString(const StringRef &F ,const DebugLoc &InstDebugLoc, b
   return (F.str()) + LiAndCol;
 }
 
+template <DepType DT>
+constexpr StringRef calls() {
+  if constexpr (DT == DepType::ADDR)
+    return "calls_addr_dep";
+  if constexpr (DT == DepType::DATA)
+    return "calls_data_dep";
+  if constexpr (DT == DepType::CTRL)
+    return "calls_ctrl_dep";
+
+    llvm_unreachable("Unknown dep type");
+}
+
+template <DepType DT>
+constexpr StringRef returns() {
+  if constexpr (DT == DepType::ADDR)
+    return "returns_addr_dep";
+  if constexpr (DT == DepType::DATA)
+    return "returns_data_dep";
+  if constexpr (DT == DepType::CTRL)
+    return "returns_ctrl_dep";
+
+    llvm_unreachable("Unknown dep type");
+}
+
+
+template <DepType DT>
+constexpr StringRef takes() {
+  if constexpr (DT == DepType::ADDR)
+    return "takes_addr_dep";
+  if constexpr (DT == DepType::DATA)
+    return "takes_data_dep";
+  if constexpr (DT == DepType::CTRL)
+    return "takes_ctrl_dep";
+
+    llvm_unreachable("Unknown dep type");
+}
+
+template <DepType DT>
+constexpr StringRef is() {
+  if constexpr (DT == DepType::ADDR)
+    return "is_addr_dep";
+  if constexpr (DT == DepType::DATA)
+    return "is_data_dep";
+  if constexpr (DT == DepType::CTRL)
+    return "is_ctrl_dep";
+
+    llvm_unreachable("Unknown dep type");
+}
+
+template <DepType DT>
+constexpr StringRef begins() {
+  if constexpr (DT == DepType::ADDR)
+    return "begins_addr_dep";
+  if constexpr (DT == DepType::DATA)
+    return "begins_data_dep";
+  if constexpr (DT == DepType::CTRL)
+    return "begins_ctrl_dep";
+
+    llvm_unreachable("Unknown dep type");
+}
+
+template <DepType DT>
+constexpr StringRef ends() {
+  if constexpr (DT == DepType::ADDR)
+    return "ends_addr_dep";
+  if constexpr (DT == DepType::DATA)
+    return "ends_data_dep";
+  if constexpr (DT == DepType::CTRL)
+    return "ends_ctrl_dep";
+
+    llvm_unreachable("Unknown dep type");
+}
+
+raw_fd_ostream &chains(size_t I) {
+  static raw_fd_ostream S[2] { raw_fd_ostream(OutFD[0], false, true), raw_fd_ostream(OutFD[1], false, true) } ;
+  return S[I];
+}
+
 template<int B, int E, typename C>
 void removeDuplicates(std::vector<SegmentID<B,E,C>> &Segments) {
-  std::sort(Segments.begin(), Segments.end());
+  std::sort(Segments.begin(), Segments.end(), SegmentID<B,E,C>::lt);
   auto Res = std::unique(Segments.begin(), Segments.end(), SegmentID<B,E,C>::equal);
   Segments.erase(Res, Segments.end());
 }
@@ -149,35 +324,54 @@ private:
   DCLinkType Type;
 };
 
+/// Adds a link to the dependency chain iff the debug location exists and is unique.
+/// Returns <false> if the \p Link has no debug location
+/// or the location is equal to the latest in the chain.
 template<typename Context>
-void DC<Context>::addLink(const typename Context::DCLink &Link, std::optional<int> Arg) {
+bool DC<Context>::addLink(const typename Context::DCLink &Link, std::optional<int> Arg) {
 
   // In source level chains, we only add Links with a location.
   // This can happen when declaring local variables.
+  // And we do not care about allocas.
   if constexpr (std::is_same_v<Context, LKMMSearchPolicy>) {
     if (!Link.Loc)
-      return;
+      return false;
   }
 
   if (Chain.empty()) {
     ArgE = Arg;
     Chain.push_back(Link);
-    return;
+    return true;
   }
 
   if (Link == Chain.back())
-    return;
+    return false;
 
   ArgB = Arg;
   Chain.push_back(Link);
+  return true;
 }
 
 /// Convenience specialization.
 /// Adds a value to the IR level dependency chain.
 template<>
-void DC<LKMMSearchPolicy>::addLink(Instruction *Val, DCLevel Lvl, std::optional<int> Arg) {
+bool DC<LKMMSearchPolicy>::addLink(Instruction *Val, DCLevel Lvl, std::optional<int> Arg) {
   LKMMSearchPolicy::DCLink Link(Val, Lvl, 0);
-  addLink(Link, Arg);
+  return addLink(Link, Arg);
+}
+
+/// Inserter for ctrl dependencies.
+/// Adds a link at the end of the IR level chain. (front of the vector)
+template<>
+bool DC<LKMMSearchPolicy>::insertLink(Instruction *Val, DCLevel Lvl, std::optional<int> Arg) {
+  LKMMSearchPolicy::DCLink Link(Val, Lvl, 0);
+
+  if (!Link.Loc)
+      return false;
+
+  Chain.insert(Chain.begin(), Link);
+  ArgB = Arg;
+  return true;
 }
 
 // No need to check for compatibility, the segment specialization
@@ -215,6 +409,9 @@ DC<LKMMAnnotateDeps>::DC(const DC<LKMMSearchPolicy> &Other) {
     auto NewLink = LKMMAnnotateDeps::DCLink(Link);
     addLink(NewLink);
   }
+
+  // Dbg locations in macro expansions are a bit weird, they might not be unique.
+  assert(Chain.size() > 0 && "Attempting to copy a chain with less than 2 links");
   ArgB = Other.ArgB;
   ArgE = Other.ArgE;
 }
@@ -243,22 +440,27 @@ DC<LKMMAnnotateDeps>::DC(const DC<LKMMSearchPolicy> &Other) {
 // (the fastest we can approach 0 is in steps of 2)
 //
 // FIXME: There is probably integer polynomial wizardry going on that could prove complexity and optimality
-template<> const std::string SegmentID<0, 0, LKMMAnnotateDeps>::Type = "Intact";
-template<> const std::string SegmentID<-1, 0, LKMMAnnotateDeps>::Type = "Rising";
-template<> const std::string SegmentID<1, 0, LKMMAnnotateDeps>::Type = "May Dangle";
-template<> const std::string SegmentID<0, -1, LKMMAnnotateDeps>::Type = "Dangling";
-template<> const std::string SegmentID<-1, -1, LKMMAnnotateDeps>::Type = "Rising & Dangling";
-template<> const std::string SegmentID<1, -1, LKMMAnnotateDeps>::Type = "May Dangle & Dangling";
-template<> const std::string SegmentID<0, 1, LKMMAnnotateDeps>::Type = "May Rise";
-template<> const std::string SegmentID<-1, 1, LKMMAnnotateDeps>::Type = "May Rise & Rising";
-template<> const std::string SegmentID<1, 1, LKMMAnnotateDeps>::Type = "May Rise & May Dangle";
+
+template<int B, int E, typename C>
+void SegmentID<B, E, C>::makePretty() {
+  if constexpr (std::is_same_v<C, LKMMSearchPolicy>) {
+    Pretty = "";
+    for (auto I = Dc.Chain.crbegin(); I != Dc.Chain.crend(); I++) {
+      Pretty += getInstLocString(I->Val->getFunction()->getName(), I->Loc, true);
+      if (I != std::prev(Dc.Chain.crend())) {
+        Pretty += "\n";
+      }
+    }
+  } else {
+    // not needed (tbd)
+  }
+}
 
 // Try to find dependencies bottom-up.
-
-class BUCtx : public InstVisitor<BUCtx> {
+template <DepType DT>
+class BUCtx : public InstVisitor<BUCtx<DT>> {
 public:
-  enum CtxKind { CK_Annot, CK_Ver };
-
+  constexpr static DepType Type = DT;
   CtxKind getKind() const { return Kind; }
 
   BUCtx(CtxKind CK)
@@ -289,6 +491,9 @@ public:
   // Potential beginning of a dep chain.
   // May end current search, always continues through mem.
   void visitLoad(LoadInst &LI);
+
+  // Helper function for visitLoad + ctrl.
+  void searchInScope(LoadInst &LI) = delete;
 
   // Helper function for visitLoad.
   void goThroughMem(LoadInst &LI);
@@ -345,6 +550,8 @@ public:
 
   void visitSelectInst(SelectInst &SI);
 
+  void visitICmpInst(ICmpInst &ICI) {};
+
 protected:
   // The function the BFS is currently visiting.
   Function *F;
@@ -356,12 +563,13 @@ private:
   const CtxKind Kind;
 };
 
-class LKMMSearchPolicy::AnnotCtx : public BUCtx {
+template<DepType DT>
+class LKMMSearchPolicy::AnnotCtx : public BUCtx<DT> {
 public:
 
-  AnnotCtx(BUCtx::CtxKind Ctx,
-      void (* AnnoFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result),
-      LKMMAnnotateDeps *PrevResult) : BUCtx(Ctx), Result(new(llvm::LKMMAnnotateDeps::DepMap)), CurrPass(Pass::Known_End), AnnotateFn(AnnoFn), PrevResult(PrevResult){};
+  AnnotCtx(CtxKind Ctx,
+      void (* AnnoFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType Type, LKMMAnnotateDeps::DepMap *Result),
+      LKMMAnnotateDeps *PrevResult) : BUCtx<DT>(Ctx), Result(new(llvm::LKMMAnnotateDeps::DepMap)), CurrPass(Pass::Known_End), AnnotateFn(AnnoFn), PrevResult(PrevResult) {};
 
   void setNewDc(std::unique_ptr<DC> NewDC) {
     CurrDC = std::move(NewDC);
@@ -377,40 +585,47 @@ public:
 
   auto getResult() { return Result; }
 
-  // Only runs once. Annotates ALL segments ending in volatile loads and stores.
-  void passOne(Function *NewF, IntactDeps_t *I, RisingDeps_t *R, MayDangleDeps_t *MD) {
-    F = NewF;
-    this->I = I;
-    this->R = R;
-    this->MD = MD;
+  void populate(DepMap<0,0> *I,
+                 DepMap<-1,0> *R,
+                 DepMap<1,0> *MD,
+                 DepMap<0,-1> *D,
+                 DepMap<-1,-1> *RD,
+                 DepMap<1,-1> *MDD,
+                 DepMap<0,1> *MR,
+                 DepMap<-1,1> *MRR,
+                 DepMap<1,1> *MRMD) {
+#define ASSIGN(Dep) { this->Dep = Dep; }
+    FOR_EACH_DP(ASSIGN)
+#undef ASSIGN
+  }
 
-    runSearch();
+  // Only runs once. Annotates ALL segments ending in volatile loads and stores.
+  void passOne(Function *NewF) {
+    this->F = NewF;
+
+    if constexpr (DT == DepType::CTRL)
+      CurrPass = Pass::Known_Beg;
+    this->runSearch();
   }
 
   // Runs on all functions with RetAttr "returns_X_dep".
   // May add more segments with the any attr.
-  void passTwo(Function *NewF, DanglingDeps_t *D, RisingDanglingDeps_t *RD, MayDangleDanglingDeps_t *MDD) {
+  void passTwo(Function *NewF) {
 
-    F = NewF;
-    this->D = D;
-    this->RD = RD;
-    this->MDD = MDD;
+    this->F = NewF;
 
     CurrPass = Pass::Known_Ret;
-    runSearch();
+    this->runSearch();
   }
 
   // Runs on all functions with FnAttr "takes_X_dep".
   // May add more segments with the any attr.
-  void passThree(Function *NewF, MayRiseDeps_t *MR, MayRiseRisingDeps_t *MRR, MayRiseMayDangleDeps_t *MRMD) {
+  void passThree(Function *NewF) {
 
-    F = NewF;
-    this->MR = MR;
-    this->MRR = MRR;
-    this->MRMD = MRMD;
+    this->F = NewF;
 
     CurrPass = Pass::Known_Call;
-    runSearch();
+    this->runSearch();
   }
 
   // Merges all segments to full dependency chains of length Depth.
@@ -419,9 +634,10 @@ public:
       buildTransitiveClosure(D);
 
     removeDuplicates(*Result);
-    for (auto I : *Result) {
-      I.print();
-    }
+    DUMP();
+    // for (auto I : *Result) {
+    //   I.print();
+    // }
   }
 
   template<int B, int E>
@@ -454,9 +670,9 @@ public:
       auto *CallingInstr = cast<CallInst>(CurrDC->Chain.back().Val);
       auto *Caller = CallingInstr->getFunction();
 
-      Caller->addFnAttr(Attribute::get(Caller->getContext(), "calls_addr_dep"));
-      F->addFnAttr(Attribute::get(F->getContext(), "takes_addr_dep"));
-      F->addParamAttr(CurrDC->ArgB.value(), Attribute::get(F->getContext(), "is_addr_dep"));
+      Caller->addFnAttr(Attribute::get(Caller->getContext(), calls<DT>()));
+      this->F->addFnAttr(Attribute::get(this->F->getContext(), takes<DT>()));
+      this->F->addParamAttr(CurrDC->ArgB.value(), Attribute::get(this->F->getContext(), is<DT>()));
     }
 
     if constexpr (B == 1) {
@@ -464,7 +680,7 @@ public:
       // definitely returns to it (else everything we just traversed is unreachable).
 
       auto *Callee = cast<ReturnInst>(CurrDC->Chain.back().Val)->getFunction();
-      Callee->addRetAttr(Attribute::get(F->getContext(), "returns_addr_dep"));
+      Callee->addRetAttr(Attribute::get(this->F->getContext(), returns<DT>()));
       // TODO: Warn about external function/intrinsic
     }
 
@@ -473,27 +689,64 @@ public:
     if constexpr (E == -1) {
 
       // TODO: rebase to newest llvm
-      assert(F->getAttributes().getRetAttrs().hasAttribute("returns_addr_dep") && "Function should not have been passed in Pass 2");
+      assert(this->F->getAttributes().getRetAttrs().hasAttribute(returns<DT>()) && "Function should not have been passed in Pass 2");
     }
 
-    if constexpr (E == 1) {
+    if constexpr (DT != DepType::CTRL && E == 1) {
 
       auto *Callee = cast<CallInst>(CurrDC->Chain.front().Val);
       if (Callee->getCalledFunction()) {
-        assert(Callee->getCalledFunction()->getAttributes().getFnAttrs().hasAttribute("takes_addr_dep") && "Function should not have been passed in Pass 3");
-        assert(Callee->getCalledFunction()->getAttributes().getParamAttrs(CurrDC->ArgE.value()).hasAttribute("is_addr_dep") && "Argument should not have been passed in Pass 3");
+        assert(Callee->getCalledFunction()->getAttributes().getFnAttrs().hasAttribute(takes<DT>()) && "Function should not have been passed in Pass 3");
+        assert(Callee->getCalledFunction()->getAttributes().getParamAttrs(CurrDC->ArgE.value()).hasAttribute(is<DT>()) && "Argument should not have been passed in Pass 3");
       }
     }
+    if constexpr (DT == DepType::CTRL && E == 1) {
+
+      auto *Ret = cast<ReturnInst>(CurrDC->Chain.front().Val);
+      auto *Callee = Ret->getFunction();
+      Callee->addRetAttr(Attribute::get(this->F->getContext(), returns<DT>()));
+      this->F->addFnAttr(Attribute::get(Ret->getContext(), calls<DT>()));
+    }
+
+    assert(getDc().Chain.size() > 0 && "Attempting to complete a segment with less than 2 links");
 
     // FIXME
     auto Seg = SegmentID<B, E, LKMMSearchPolicy>(getDc());
-    getDCPtr().release();
     TypedMap->push_back(Seg);
+    getDCPtr().release();
   }
 
-  enum Pass { Known_End, Known_Ret, Known_Call, Match };
+  enum Pass { Known_End, Known_Ret, Known_Call, Known_Beg, Match };
 
   Pass currPass() const { return CurrPass; }
+
+  void DUMP() {
+#define PRINT_DEPS(Dep) do { \
+  chains(this->getKind()) << std::remove_reference_t<decltype(*Dep)>::value_type::Type << ": " << Dep->size() << "\n"; \
+  for (auto &Seg : *Dep) { \
+    Seg.makePretty(); \
+    chains(this->getKind()) << Seg.Pretty << "\n\n"; \
+    Num##Dep[this->Type][this->getKind()][1]++; \
+  } \
+} while (0);
+    FOR_EACH_DP(PRINT_DEPS)
+#undef PRINT_DEPS
+
+    StatCombined[this->Type][this->getKind()][0] = [](auto *R){ if (R->size() == 0) {return 0ul;}; size_t tmp = -1; for (const auto &Seg : *R) { tmp = std::min(tmp, Seg.getDC().Chain.size()); } return tmp; }(Result);
+    StatCombined[this->Type][this->getKind()][1] = [](auto *R){ if (R->size() == 0) {return 0ul;}; size_t tmp = 0; for (const auto &Seg : *R) { tmp = std::max(tmp, Seg.getDC().Chain.size()); } return tmp; }(Result);
+    StatCombined[this->Type][this->getKind()][2] = [](auto *R){ if (R->size() == 0) {return 0ul;}; size_t tmp = 0; for (const auto &Seg : *R) { tmp += Seg.getDC().Chain.size(); } return tmp/R->size(); }(Result);
+    chains(this->getKind()) << "Combined:\n";
+    for (const auto &Seg : *Result) {
+      chains(this->getKind()) << Seg.Pretty << "\n\n";
+    }
+  }
+
+  void dump() {
+    errs() << "Combined:\n";
+    for (const auto &Seg : *Result) {
+      errs() << Seg.Pretty << "\n\n";
+    }
+  }
 
 private:
   // Currently tracked DC.
@@ -505,19 +758,19 @@ private:
   Pass CurrPass;
 
   // Pass 1, can never be extended
-  IntactDeps_t *I;
-  RisingDeps_t *R;
-  MayDangleDeps_t *MD;
+  IntactDeps_t *I = nullptr;
+  RisingDeps_t *R = nullptr;
+  MayDangleDeps_t *MD = nullptr;
 
   // Pass 2 & 3, can be extended by any segment with an even delta (0 or 2)
-  DanglingDeps_t *D;
-  RisingDanglingDeps_t *RD;
-  MayDangleDanglingDeps_t *MDD;
-  MayRiseDeps_t *MR;
-  MayRiseRisingDeps_t *MRR;
-  MayRiseMayDangleDeps_t *MRMD;
+  DanglingDeps_t *D = nullptr;
+  RisingDanglingDeps_t *RD = nullptr;
+  MayDangleDanglingDeps_t *MDD = nullptr;
+  MayRiseDeps_t *MR = nullptr;
+  MayRiseRisingDeps_t *MRR = nullptr;
+  MayRiseMayDangleDeps_t *MRMD = nullptr;
 
-  void (*AnnotateFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result);
+  void (*AnnotateFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType Type, LKMMAnnotateDeps::DepMap *Result);
 
   LKMMAnnotateDeps *PrevResult;
 
@@ -528,12 +781,13 @@ private:
 
 /// Converts an LLVM IR level chain to a source level chain, and
 /// annotates the chain in the IR.
-void LKMMAnnotateDepsPass::annotateChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result) {
+void LKMMAnnotateDepsPass::annotateChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType DT, LKMMAnnotateDeps::DepMap *Result) {
 
     std::string Annot;
     std::string Pretty;
 
     llvm::SegmentID<0,0,LKMMAnnotateDeps> Ret(Seg);
+    assert(!Ret.getDC().Chain.empty() && "Cannot annotate empty chain");
 
     for (auto I = Ret.getDC().Chain.crbegin(); I != Ret.getDC().Chain.crend(); I++) {
       Annot += getInstLocString(I->F->getName(), I->Loc);
@@ -544,21 +798,37 @@ void LKMMAnnotateDepsPass::annotateChain(const SegmentID<0,0, LKMMSearchPolicy> 
       }
     }
 
+    std::string TyB;
+    std::string TyE;
+    switch (DT) {
+      case DepType::ADDR:
+        TyB = begins<DepType::ADDR>();
+        TyE = ends<DepType::ADDR>();
+        break;
+      case DepType::DATA:
+        TyB = begins<DepType::DATA>();
+        TyE = ends<DepType::DATA>();
+        break;
+      case DepType::CTRL:
+        TyB = begins<DepType::CTRL>();
+        TyE = ends<DepType::CTRL>();
+        break;
+    }
     {
       auto I = Seg.getDC().Chain.back();
       MDNode *Meta = MDNode::get(I.Val->getContext(), MDString::get(I.Val->getContext(), Annot));
 
-      if (auto *Existing = I.Val->getMetadata("addr_dep"))
+      if (auto *Existing = I.Val->getMetadata(TyB))
         Meta = llvm::MDNode::concatenate(Existing, Meta);
-      I.Val->setMetadata("addr_dep", Meta);
+      I.Val->setMetadata(TyB, Meta);
     }
     {
       auto I = Seg.getDC().Chain.front();
       MDNode *Meta = MDNode::get(I.Val->getContext(), MDString::get(I.Val->getContext(), Annot));
 
-      if (auto *Existing = I.Val->getMetadata("addr_dep"))
+      if (auto *Existing = I.Val->getMetadata(TyE))
         Meta = llvm::MDNode::concatenate(Existing, Meta);
-      I.Val->setMetadata("addr_dep", Meta);
+      I.Val->setMetadata(TyE, Meta);
     }
 
     Ret.setStr(Pretty);
@@ -567,11 +837,12 @@ void LKMMAnnotateDepsPass::annotateChain(const SegmentID<0,0, LKMMSearchPolicy> 
 
 /// Converts an LLVM IR level chain to a source level chain, and
 /// optionally checks for annotations from the previous rounds.
-void LKMMVerifyDepsPass::addChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result) {
+void LKMMVerifyDepsPass::addChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType DT, LKMMAnnotateDeps::DepMap *Result) {
   std::string Annot;
   std::string Pretty;
 
   llvm::SegmentID<0,0,LKMMAnnotateDeps> Ret(Seg);
+  assert(!Ret.getDC().Chain.empty() && "Cannot annotate empty chain");
 
   for (auto I = Ret.getDC().Chain.crbegin(); I != Ret.getDC().Chain.crend(); I++) {
     Annot += getInstLocString(I->F->getName(), I->Loc);
@@ -593,12 +864,12 @@ void LKMMVerifyDepsPass::addChain(const SegmentID<0,0, LKMMSearchPolicy> &Seg, L
   */
 
   Ret.setStr(Pretty);
-
   Result->push_back(Ret);
 }
 
+template<DepType DT>
 template<int B, int M, int E>
-LKMMSearchPolicy::DepMap<B,E> LKMMSearchPolicy::AnnotCtx::match(DepMap<B, M> *Beg, DepMap<-M, E> *End) {
+LKMMSearchPolicy::DepMap<B,E> LKMMSearchPolicy::AnnotCtx<DT>::match(DepMap<B, M> *Beg, DepMap<-M, E> *End) {
   if (!Beg || !End)
     return DepMap<B,E>();
 
@@ -611,18 +882,18 @@ LKMMSearchPolicy::DepMap<B,E> LKMMSearchPolicy::AnnotCtx::match(DepMap<B, M> *Be
     }
   }
 
-  removeDuplicates(Ret);
   return Ret;
 }
 
-void LKMMSearchPolicy::AnnotCtx::buildTransitiveClosure(const size_t Depth) {
+template<DepType DT>
+void LKMMSearchPolicy::AnnotCtx<DT>::buildTransitiveClosure(const size_t Depth) {
 
   LKMMAnnotateDeps::DepMap *IntactDeps = Result;
 
   if (Depth == 1) {
     // Depth 1: Trivial
     for (auto &Seg : *I) {
-      AnnotateFn(Seg, IntactDeps);
+      AnnotateFn(Seg, DT, IntactDeps);
     }
     return;
   }
@@ -631,12 +902,12 @@ void LKMMSearchPolicy::AnnotCtx::buildTransitiveClosure(const size_t Depth) {
     // Depth 2: Still trivial, concatenate all matching R/MR and MD/D pairs
     auto DCs = match(MR, R);
     for (auto &Seg : DCs) {
-      AnnotateFn(Seg, IntactDeps);
+      AnnotateFn(Seg, DT, IntactDeps);
     }
 
     DCs = match(D, MD);
     for (auto &Seg : DCs) {
-      AnnotateFn(Seg, IntactDeps);
+      AnnotateFn(Seg, DT, IntactDeps);
     }
     return;
   }
@@ -689,15 +960,16 @@ void LKMMSearchPolicy::AnnotCtx::buildTransitiveClosure(const size_t Depth) {
   }
 
   for (auto &Seg : match(MR, PrevNeg.get())) {
-      AnnotateFn(Seg, IntactDeps);
+      AnnotateFn(Seg, DT, IntactDeps);
   }
   for (auto &Seg : match(D, PrevPos.get())) {
-      AnnotateFn(Seg, IntactDeps);
+      AnnotateFn(Seg, DT, IntactDeps);
   }
 }
 
-void BUCtx::handleBranch(BasicBlock *NextBB) {
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+template<DepType DT>
+void BUCtx<DT>::handleBranch(BasicBlock *NextBB) {
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<Type> *)this;
   auto *CurrBB = Ann->getDc().Chain.back().Val->getParent();
 
   if (auto *BI = dyn_cast<BranchInst>(NextBB->getTerminator())) {
@@ -741,17 +1013,18 @@ void BUCtx::handleBranch(BasicBlock *NextBB) {
   }
 }
 
-void BUCtx::visit(Value *V) {
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+template <DepType DT>
+void BUCtx<DT>::visit(Value *V) {
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
   if (auto *I = dyn_cast<Instruction>(V)) {
     auto *NextBB = I->getParent();
     // Whatever we want to insert, it is in a different BB.
     // We need to check for branches, even for addr & data dependencies
     // because they can be optimized to selects.
-    if (NextBB != Ann->getDc().Chain.back().Val->getParent()) {
+    if (!Ann->getDc().Chain.empty() && NextBB != Ann->getDc().Chain.back().Val->getParent()) {
       handleBranch(NextBB);
     }
-    InstVisitor::visit(I);
+    InstVisitor<BUCtx<DT>>::visit(I);
   }
   if (auto *A = dyn_cast<Argument>(V)) {
     visitArgument(A);
@@ -759,41 +1032,64 @@ void BUCtx::visit(Value *V) {
 }
 
 // TODO: avoid back edges
-void BUCtx::visitBasicBlock(BasicBlock &BB) {
+/// Start of search for addr and data dependencies.
+/// Mostly the same, except when looking at stores.
+template <DepType DT>
+void BUCtx<DT>::visitBasicBlock(BasicBlock &BB) {
   this->BB = &BB;
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
 
-  if (Ann->currPass() == LKMMSearchPolicy::AnnotCtx::Pass::Known_End) {
+  if (Ann->currPass() == LKMMSearchPolicy::AnnotCtx<DT>::Pass::Known_End) {
     for (auto &I : BB) {
-      Value *Ptr = nullptr;
+      Value *PtrOrVal = nullptr;
 
-      // Address dependencies end in a volatile load/store
-      // with the ptr operand being the end of the chain.
-      if (auto *SI = dyn_cast<StoreInst>(&I)) {
-        if (!SI->isVolatile())
-          continue;
+      if constexpr (DT == DepType::ADDR) {
+        // Address dependencies end in a volatile load/store
+        // with the ptr operand being the end of the chain.
+        if (auto *SI = dyn_cast<StoreInst>(&I)) {
+          if (!SI->isVolatile())
+            continue;
 
-        Ptr = SI->getPointerOperand();
+          PtrOrVal = SI->getPointerOperand();
+        }
+        if (auto *LI = dyn_cast<LoadInst>(&I)) {
+          if (!LI->isVolatile())
+            continue;
+
+          PtrOrVal = LI->getPointerOperand();
+        }
+
+        if (PtrOrVal) {
+
+            auto End = std::make_unique<DC<LKMMSearchPolicy>>();
+            End->addLink(&I, DCLevel::PTR);
+            Ann->setNewDc(std::move(End));
+            visit(PtrOrVal);
+        }
       }
-      if (auto *LI = dyn_cast<LoadInst>(&I)) {
-        if (!LI->isVolatile())
-          continue;
+      if constexpr (DT == DepType::DATA) {
+        // Data dependencies end in a volatile store
+        // with the data operand being the end of the chain.
+        if (auto *SI = dyn_cast<StoreInst>(&I)) {
+          if (!SI->isVolatile())
+            continue;
 
-        Ptr = LI->getPointerOperand();
-      }
+          PtrOrVal = SI->getValueOperand();
+        }
+        if (PtrOrVal) {
 
-      if (Ptr) {
-
+          auto Lvl = PtrOrVal->getType()->isPointerTy() ? DCLevel::PTR : DCLevel::PTE;
           auto End = std::make_unique<DC<LKMMSearchPolicy>>();
-          End->addLink(&I, DCLevel::PTR);
+          End->addLink(&I, Lvl);
           Ann->setNewDc(std::move(End));
-          visit(Ptr);
+          visit(PtrOrVal);
+        }
       }
     }
       return;
   } // !Known_End
 
-  if (Ann->currPass() == LKMMSearchPolicy::AnnotCtx::Pass::Known_Ret) {
+  if (Ann->currPass() == LKMMSearchPolicy::AnnotCtx<DT>::Pass::Known_Ret) {
     // We also need to track any potential chains from return values.
     // FIXME: Aggregate returns should have an annotation per element.
     if (auto *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
@@ -810,17 +1106,17 @@ void BUCtx::visitBasicBlock(BasicBlock &BB) {
     return;
   } // !Known_Ret
 
-  if (Ann->currPass() == LKMMSearchPolicy::AnnotCtx::Pass::Known_Call) {
+  if (Ann->currPass() == LKMMSearchPolicy::AnnotCtx<DT>::Pass::Known_Call) {
     for (auto &I : BB) {
     // We also need to track any potential chains from call isntructions.
       if (auto *CI = dyn_cast<CallInst>(&I)) {
         // Only track calls to functions we have seen before.
-        if (CI->getCalledFunction() && !CI->getCalledFunction()->getAttributes().hasFnAttr("takes_addr_dep"))
+        if (CI->getCalledFunction() && !CI->getCalledFunction()->getAttributes().hasFnAttr(takes<DT>()))
           continue;
 
         for (auto &Arg : CI->args()) {
           auto ArgNo = CI->getArgOperandNo(&Arg);
-          if (CI->getCalledFunction() && !CI->getCalledFunction()->getAttributes().hasParamAttr(ArgNo, "is_addr_dep"))
+          if (CI->getCalledFunction() && !CI->getCalledFunction()->getAttributes().hasParamAttr(ArgNo, is<DT>()))
               continue;
 
           auto End = std::make_unique<DC<LKMMSearchPolicy>>();
@@ -840,8 +1136,47 @@ void BUCtx::visitBasicBlock(BasicBlock &BB) {
   llvm_unreachable("Unknown Annotation Pass");
 }
 
-void BUCtx::visitArgument(Argument *A) {
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+template <>
+void BUCtx<DepType::CTRL>::visitBasicBlock(BasicBlock &BB) {
+  constexpr static DepType DT = DepType::CTRL;
+  this->BB = &BB;
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
+
+  // Search is different for control dependencies.
+  // First we check all conditionals, if they depend on a volatile load. (so far, so normal)
+  // Then we check all volatile stores and calls that don't post-dominate the branch.
+  if (Ann->currPass() == LKMMSearchPolicy::AnnotCtx<DT>::Pass::Known_Beg) {
+    auto *Term = BB.getTerminator();
+    if (auto *BI = dyn_cast<BranchInst>(Term)) {
+      if (!BI->isConditional())
+        return;
+
+      auto End = std::make_unique<DC<LKMMSearchPolicy>>();
+      End->addLink(BI, DCLevel::EMPTY);
+      Ann->setNewDc(std::move(End));
+      visit(BI->getCondition());
+    }
+  }
+}
+
+template<>
+void BUCtx<DepType::CTRL>::visitICmpInst(ICmpInst &ICI) {
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DepType::CTRL> *)this;
+
+  Ann->getDc().addLink(&ICI, DCLevel::PTE);
+  for (auto &Op : ICI.operands()) {
+    auto Curr = Ann->getDCPtr();
+    auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
+
+    Ann->setNewDc(std::move(Cpy));
+    visit(Op);
+    Ann->setNewDc(std::move(Curr));
+  }
+}
+
+template <DepType DT>
+void BUCtx<DT>::visitArgument(Argument *A) {
+  LKMMSearchPolicy::AnnotCtx<DT> *Ann = static_cast<LKMMSearchPolicy::AnnotCtx<DT> *>(this);
 
   // We found a rising segment!
   // Add a new segment for all call sites of F (likely outside of F)
@@ -850,26 +1185,28 @@ void BUCtx::visitArgument(Argument *A) {
     if (auto *CI = dyn_cast<CallInst>(CallingInstr)) {
 
       auto Curr = Ann->getDCPtr();
-      auto Cpy = std::make_unique<decltype(Curr)::element_type>(*Curr);
+      auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
 
       Ann->setNewDc(std::move(Cpy));
       Ann->getDc().addLink(CI, getLastNonEmptyLvl(Curr->Chain), A->getArgNo());
 
       if (auto *_ = dyn_cast<ReturnInst>(Curr->Chain.front().Val))
-        Ann->makeIntactDep<-1, -1>();
+        Ann->template makeIntactDep<-1, -1>();
       else if (auto *_ = dyn_cast<CallInst>(Curr->Chain.front().Val))
-        Ann->makeIntactDep<-1, 1>();
+        Ann->template makeIntactDep<-1, 1>();
       else
-        Ann->makeIntactDep<-1, 0>();
+        Ann->template makeIntactDep<-1, 0>();
 
       Ann->setNewDc(std::move(Curr));
     }
   }
 }
 
-void BUCtx::visitStore(StoreInst &SI) {
+
+template <DepType DT>
+void BUCtx<DT>::visitStore(StoreInst &SI) {
 // We might end up here because we stored the linking val to mem
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
 
   for (auto L = Ann->getDc().Chain.crbegin(); L != Ann->getDc().Chain.crend(); L++) {
     if (L->Lvl == DCLevel::PTE)
@@ -878,44 +1215,129 @@ void BUCtx::visitStore(StoreInst &SI) {
       continue;
     return;
   }
-  Ann->getDc().addLink(&SI, DCLevel::PTR);
+  if(!Ann->getDc().addLink(&SI, DCLevel::PTR))
+    return;
+
   auto *Val = SI.getValueOperand();
   visit(Val);
 }
 
-void BUCtx::visitLoad(LoadInst &LI) {
+template <DepType DT>
+void BUCtx<DT>::visitLoad(LoadInst &LI) {
   if (LI.isVolatile()) {
     // We found an internal beginning!
-    auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+    LKMMSearchPolicy::AnnotCtx<DT> *Ann = static_cast<LKMMSearchPolicy::AnnotCtx<DT> *>(this);
 
     // Save a copy without the load
     auto Curr = Ann->getDCPtr();
-    auto Cpy = std::make_unique<decltype(Curr)::element_type>(*Curr);
+    auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
 
     Ann->setNewDc(std::move(Cpy));
     Ann->getDc().addLink(&LI, DCLevel::PTR);
     if (auto *_ = dyn_cast<ReturnInst>(Curr->Chain.front().Val))
-      Ann->makeIntactDep<0, -1>();
+      Ann->template makeIntactDep<0, -1>();
     else if (auto *_ = dyn_cast<CallInst>(Curr->Chain.front().Val))
-      Ann->makeIntactDep<0, 1>();
+      Ann->template makeIntactDep<0, 1>();
     else
-      Ann->makeIntactDep<0, 0>();
+      Ann->template makeIntactDep<0, 0>();
 
     Ann->setNewDc(std::move(Curr));
   }
   goThroughMem(LI);
 }
 
-void BUCtx::goThroughMem(LoadInst &LI) {
+template<>
+void BUCtx<DepType::CTRL>::searchInScope(LoadInst &LI) {
 
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DepType::CTRL> *)this;
+  auto *Cond = cast<BranchInst>(Ann->getDc().Chain.front().Val);
+
+  for (auto &BB: *(Cond->getFunction())) {
+
+    if (Cond == BB.getTerminator())
+      continue;
+
+    bool IsAlwaysReachable = true;
+    bool IsReachableOnce = false;
+    for (auto *Succ: Cond->successors()) {
+      bool tmp = isPotentiallyReachable(Succ, &BB);
+      IsAlwaysReachable &= tmp;
+      IsReachableOnce |= tmp; // false positives!
+    }
+
+    if (!IsReachableOnce)
+      continue;
+
+    // All branches lead to BB -> syntactic dependency at best
+    if (IsAlwaysReachable)
+      continue;
+
+    for (auto &I : BB) {
+      if (auto *SI = dyn_cast<StoreInst>(&I)) {
+        if (!SI->isVolatile())
+          continue;
+
+        auto Curr = Ann->getDCPtr();
+        auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
+
+        Ann->setNewDc(std::move(Cpy));
+        Ann->getDc().addLink(&LI, DCLevel::PTE);
+        Ann->getDc().insertLink(SI, DCLevel::PTE);
+        Ann->makeIntactDep<0, 0>();
+
+        Ann->setNewDc(std::move(Curr));
+      }
+      if (auto *CI = dyn_cast<CallInst>(&I)) {
+
+        auto *Callee = CI->getCalledFunction();
+        if (!Callee)
+          continue;
+
+        for (auto &CBB : *Callee) {
+          if (auto *RI = dyn_cast<ReturnInst>(CBB.getTerminator())) {
+            auto Curr = Ann->getDCPtr();
+            auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
+
+            Ann->setNewDc(std::move(Cpy));
+            Ann->getDc().addLink(&LI, DCLevel::PTE);
+            Ann->getDc().insertLink(RI, getLastNonEmptyLvl(Curr->Chain));
+
+            Ann->template makeIntactDep<0, 1>();
+            Ann->setNewDc(std::move(Curr));
+          }
+        }
+      }
+
+
+    }
+  }
+
+  return;
+}
+
+template <>
+void BUCtx<DepType::CTRL>::visitLoad(LoadInst &LI) {
+  if (!LI.isVolatile()) {
+    goThroughMem(LI);
+    return;
+  }
+
+  searchInScope(LI);
+}
+
+
+template <DepType DT>
+void BUCtx<DT>::goThroughMem(LoadInst &LI) {
+
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
 
   // TODO: Are double load/stores ok?
   // Sounds like aliasing
-  if (getLastNonEmptyLvl(Ann->getDc().Chain) == DCLevel::PTE) return;
+  //if (getLastNonEmptyLvl(Ann->getDc().Chain) != DCLevel::PTR) return;
 
-  assert(getLastNonEmptyLvl(Ann->getDc().Chain) == DCLevel::PTR &&
-         "Expected a pointer to be the last link in the chain for Load");
+  //FIXME
+  //assert(getLastNonEmptyLvl(Ann->getDc().Chain) == DCLevel::PTR &&
+  //       "Expected a pointer to be the last link in the chain for Load");
   Ann->getDc().addLink(&LI, DCLevel::PTE);
 
   // Find previous stores that write the same location and continue there.
@@ -923,7 +1345,11 @@ void BUCtx::goThroughMem(LoadInst &LI) {
   for (auto *U : LI.getPointerOperand()->users()) {
     if (!isa<StoreInst>(U))
       continue;
+
     auto *SI = cast<StoreInst>(U);
+
+    if (SI->getFunction() != LI.getFunction())
+      continue;
 
     if (!isPotentiallyReachable(SI->getParent(), LI.getParent())) continue;
 
@@ -934,7 +1360,7 @@ void BUCtx::goThroughMem(LoadInst &LI) {
     {
       if (SI->getPointerOperand() == LI.getPointerOperand()) {
         auto Curr = Ann->getDCPtr();
-        auto Cpy = std::make_unique<decltype(Curr)::element_type>(*Curr);
+        auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
 
         Ann->setNewDc(std::move(Cpy));
         visit(SI);
@@ -946,10 +1372,11 @@ skip:
   }
 }
 
-void BUCtx::visitGetElementPtrInst(GetElementPtrInst &GEP) {
+template <DepType DT>
+void BUCtx<DT>::visitGetElementPtrInst(GetElementPtrInst &GEP) {
 
   // GEP is a glorified add
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
 
   assert(getLastNonEmptyLvl(Ann->getDc().Chain) == DCLevel::PTR &&
          "Expected a pointer to be the last link in the chain for GEP");
@@ -960,7 +1387,7 @@ void BUCtx::visitGetElementPtrInst(GetElementPtrInst &GEP) {
 
   // Track all indexes
   for (auto &Idx : GEP.indices()) {
-    auto Cpy = std::make_unique<decltype(Curr)::element_type>(*Curr);
+    auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
     Ann->setNewDc(std::move(Cpy));
     visit(Idx);
   }
@@ -970,9 +1397,10 @@ void BUCtx::visitGetElementPtrInst(GetElementPtrInst &GEP) {
   visit(GEP.getPointerOperand());
 }
 
-void BUCtx::visitCallInst(CallInst &CI) {
+template <DepType DT>
+void BUCtx<DT>::visitCallInst(CallInst &CI) {
 
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
 
   // We found segments that may dangle!
   // Add a new segment for all returns in the callee.
@@ -986,32 +1414,34 @@ void BUCtx::visitCallInst(CallInst &CI) {
   for (auto &BB : *Callee) {
     if (auto *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
       auto Curr = Ann->getDCPtr();
-      auto Cpy = std::make_unique<decltype(Curr)::element_type>(*Curr);
+      auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
 
       Ann->setNewDc(std::move(Cpy));
       Ann->getDc().addLink(RI, getLastNonEmptyLvl(Curr->Chain));
 
       auto *End = Ann->getDc().Chain.front().Val;
       if (auto *_ = dyn_cast<ReturnInst>(End))
-        Ann->makeIntactDep<1, -1>();
+        Ann->template makeIntactDep<1, -1>();
       else if (auto *_ = dyn_cast<CallInst>(End))
-        Ann->makeIntactDep<1, 1>();
+        Ann->template makeIntactDep<1, 1>();
       else
-        Ann->makeIntactDep<1, 0>();
+        Ann->template makeIntactDep<1, 0>();
 
       Ann->setNewDc(std::move(Curr));
     }
   }
 }
 
-void BUCtx::visitSelectInst(SelectInst &SI) {
+template <DepType DT>
+void BUCtx<DT>::visitSelectInst(SelectInst &SI) {
 
-  auto *Ann = (LKMMSearchPolicy::AnnotCtx *)this;
+  auto *Ann = (LKMMSearchPolicy::AnnotCtx<DT> *)this;
   Ann->getDc().addLink(&SI, getLastNonEmptyLvl(Ann->getDc().Chain));
+
 
   for (auto &Op : SI.operands()) {
     auto Curr = Ann->getDCPtr();
-    auto Cpy = std::make_unique<decltype(Curr)::element_type>(*Curr);
+    auto Cpy = std::make_unique<DC<LKMMSearchPolicy>>(*Curr);
 
     Ann->setNewDc(std::move(Cpy));
     visit(Op);
@@ -1021,7 +1451,7 @@ void BUCtx::visitSelectInst(SelectInst &SI) {
 
 class LKMMSearchPolicy::LKMMAnnotator {
 public:
-  LKMMAnnotator( BUCtx::CtxKind Kind, void (* AnnoFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result), LKMMAnnotateDeps *PrevResult = nullptr) :
+  LKMMAnnotator( CtxKind Kind, void (* AnnoFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType DT, LKMMAnnotateDeps::DepMap *Result), LKMMAnnotateDeps *PrevResult = nullptr) :
                     Kind(Kind),
                     AnnoFn(AnnoFn),
                     PrevResult(PrevResult),
@@ -1036,11 +1466,13 @@ public:
                     MayRiseMayDangleDeps(std::make_unique<MayRiseMayDangleDeps_t>()),
                     Stats({}) {};
 
+  template <DepType DT>
   llvm::LKMMAnnotateDeps::DepMap *run(Module &M, ModuleAnalysisManager &AM);
 
 private:
-  BUCtx::CtxKind Kind;
-  void (* AnnoFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, LKMMAnnotateDeps::DepMap *Result);
+  const CtxKind Kind;
+
+  void (* AnnoFn)(const SegmentID<0,0, LKMMSearchPolicy> &Seg, const DepType Type, LKMMAnnotateDeps::DepMap *Result);
   llvm::LKMMAnnotateDeps *PrevResult;
 
   std::unique_ptr<IntactDeps_t> IntactDeps;
@@ -1054,7 +1486,7 @@ private:
   std::unique_ptr<MayRiseMayDangleDeps_t> MayRiseMayDangleDeps;
 
   void saveStats();
-  bool updateStats();
+  bool updateStats(DepType DT);
 
   struct Stats {
     size_t Intact;
@@ -1068,6 +1500,19 @@ private:
     size_t MayRiseMayDangle;
   } Stats;
 
+  void reset() {
+    IntactDeps->clear();
+    RisingDeps->clear();
+    MayDangleDeps->clear();
+    DanglingDeps->clear();
+    RisingDanglingDeps->clear();
+    MayDangleDanglingDeps->clear();
+    MayRiseDeps->clear();
+    MayRiseRisingDeps->clear();
+    MayRiseMayDangleDeps->clear();
+
+    Stats = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  }
   SmallVector<DC> DCs;
 };
 
@@ -1086,7 +1531,7 @@ void LKMMSearchPolicy::LKMMAnnotator::saveStats() {
   FOR_EACH_DEP(SAVE_STAT);
 }
 
-bool LKMMSearchPolicy::LKMMAnnotator::updateStats() {
+bool LKMMSearchPolicy::LKMMAnnotator::updateStats(DepType DT) {
   bool Changed = false;
 
 #define CMP_AND_PRINT(STAT) \
@@ -1094,6 +1539,7 @@ bool LKMMSearchPolicy::LKMMAnnotator::updateStats() {
     if ( size_t Diff = STAT##Deps->size() - Stats.STAT ) { \
       Changed = true; \
       errs() << #STAT << " increased by " << Diff << "\n"; \
+      Num##STAT[DT][Kind][0] += Diff; \
     } \
     SAVE_STAT(STAT); \
   } while (0);
@@ -1105,8 +1551,12 @@ bool LKMMSearchPolicy::LKMMAnnotator::updateStats() {
 }
 #undef SAVE_STAT
 
+template <DepType DT>
 llvm::LKMMAnnotateDeps::DepMap *LKMMSearchPolicy::LKMMAnnotator::run(Module &M, ModuleAnalysisManager &AM) {
-  AnnotCtx AC(Kind, AnnoFn, PrevResult);
+  AnnotCtx<DT> AC(Kind, AnnoFn, PrevResult);
+
+  EnableStatistics(true);
+  reset();
 
   for (auto &F : M) {
 
@@ -1114,8 +1564,12 @@ llvm::LKMMAnnotateDeps::DepMap *LKMMSearchPolicy::LKMMAnnotator::run(Module &M, 
     if (F.empty())
       continue;
 
+    AC.populate(IntactDeps.get(), RisingDeps.get(), MayDangleDeps.get(),
+                DanglingDeps.get(), RisingDanglingDeps.get(), MayDangleDanglingDeps.get(),
+                MayRiseDeps.get(), MayRiseRisingDeps.get(), MayRiseMayDangleDeps.get());
+
     // Annotate dependencies ending in volatile loads and stores.
-    AC.passOne(&F, IntactDeps.get(), RisingDeps.get(), MayDangleDeps.get());
+    AC.passOne(&F);
   }
 
   size_t Depth = 5;
@@ -1124,23 +1578,18 @@ llvm::LKMMAnnotateDeps::DepMap *LKMMSearchPolicy::LKMMAnnotator::run(Module &M, 
 
     for (auto &F : M) {
       //Annotate dependencies ending in returns.
-      if (!F.getAttributes().getRetAttrs().hasAttribute("returns_addr_dep"))
+      if (!F.getAttributes().getRetAttrs().hasAttribute(returns<DT>()))
         continue;
-      AC.passTwo(&F, DanglingDeps.get(), RisingDanglingDeps.get(), MayDangleDanglingDeps.get());
+      AC.passTwo(&F);
     }
 
     for (auto &F : M) {
       //Annotate dependencies ending in calls.
-      if (!F.hasFnAttribute("calls_addr_dep"))
+      if (!F.hasFnAttribute(calls<DT>()))
         continue;
-      AC.passThree(&F, MayRiseDeps.get(), MayRiseRisingDeps.get(), MayRiseMayDangleDeps.get());
+      AC.passThree(&F);
     }
-  } while (updateStats() && Depth);
-
-  // only merge if at least one pass ran
-  auto *Ret = AC.getResult();
-  if (Ret->empty())
-    return Ret;
+  } while (updateStats(DT) && Depth);
 
   AC.merge(5);
   return AC.getResult();
@@ -1150,7 +1599,13 @@ PreservedAnalyses LKMMVerifier::run(Module &M, ModuleAnalysisManager &AM) {
   return PreservedAnalyses::all();
 }
 
-void LKMMVerifyDepsPass::verifyChain(LKMMAnnotateDeps::DepMap *Pre, LKMMAnnotateDeps::DepMap *Post) {
+void LKMMVerifyDepsPass::verifyChain(LKMMAnnotateDeps::DepMap *Pre, LKMMAnnotateDeps::DepMap *Post, Module &M) {
+
+  auto EC = std::error_code();
+  auto Name = M.getModuleIdentifier();
+  std::replace(Name.begin(), Name.end(), '/', '_');
+  auto FileName = Prefix + "matched_chains_" + Name + ".txt";
+  auto Matches = raw_fd_ostream(FileName, EC, sys::fs::CreationDisposition::CD_CreateAlways);
 
   for (auto &Seg : *Pre) {
 
@@ -1162,21 +1617,23 @@ void LKMMVerifyDepsPass::verifyChain(LKMMAnnotateDeps::DepMap *Pre, LKMMAnnotate
     });
 
     if (It == Post->end()) {
-      llvm::errs() << "Missing chain for: " << Seg.Pretty << "\n\n";
-      return;
+      Matches << raw_fd_ostream::Colors::RED << "Missing chain for:\n";
+      Matches << raw_fd_ostream::Colors::RESET << Seg.Pretty << "\n\n";
+      continue;
     }
 
     auto Dbg = It;
 
     // The segments should be sorted
-    while (Seg == *It) {
+    while (It != Post->end() && Seg == *It) {
       for (auto Link = It->getDC().Chain.cbegin(); Link != It->getDC().Chain.cend(); Link++) {
         auto Jt = std::find_if(Seg.getDC().Chain.cbegin(), Seg.getDC().Chain.cend(),
           [&Link](const LKMMAnnotateDeps::DCLink &SegLink) {
           return Link->Loc == SegLink.Loc;
         });
         if (Jt == Seg.getDC().Chain.cend()) {
-          llvm::errs() << "Missing Link: " << getInstLocString(Link->F->getName(), Link->Loc, false) << "\n\n";
+          Matches << raw_fd_ostream::Colors::RED << "Missing Link:\n";
+          Matches << raw_fd_ostream::Colors::RESET << getInstLocString(Link->F->getName(), Link->Loc, false) << "\n\n";
           break;
         }
       }
@@ -1184,8 +1641,10 @@ void LKMMVerifyDepsPass::verifyChain(LKMMAnnotateDeps::DepMap *Pre, LKMMAnnotate
     }
 
   //#ifdef LLVM_DEBUG
-    errs() << "\nMatched:\nPRE-OPT:\n" <<Seg.Pretty <<
-    "\nPOST_OPT:\n" << Dbg->Pretty << "\n\n";
+    Matches << raw_fd_ostream::Colors::GREEN << "Matched:\nPRE-OPT:\n";
+    Matches << raw_fd_ostream::Colors::RESET << Seg.Pretty;
+    Matches << raw_fd_ostream::Colors::GREEN << "\nPOST_OPT:\n";
+    Matches << raw_fd_ostream::Colors::RESET << Dbg->Pretty << "\n\n";
   //#endif
   }
 }
@@ -1198,8 +1657,29 @@ AnalysisKey LKMMAnnotateDepsPass::Key;
 
 LKMMAnnotateDeps LKMMAnnotateDepsPass::run(Module &M,
                                             ModuleAnalysisManager &AM) {
-  auto A = LKMMSearchPolicy::LKMMAnnotator(BUCtx::CtxKind::CK_Annot, &annotateChain);
-  return LKMMAnnotateDeps(A.run(M, AM));
+
+  auto EC = std::error_code();
+  auto Name = M.getModuleIdentifier();
+  std::replace(Name.begin(), Name.end(), '/', '_');
+  auto FileName = Prefix + "Pre_Segments_" + Name + ".txt";
+  sys::fs::openFileForWrite(FileName, OutFD[0], sys::fs::CreationDisposition::CD_CreateAlways, sys::fs::OF_None);
+  FileName = Prefix + "Post_Segments_" + Name + ".txt";
+  sys::fs::openFileForWrite(FileName, OutFD[1], sys::fs::CreationDisposition::CD_CreateAlways, sys::fs::OF_None);
+  FileName = Prefix + "Mod_" + Name + ".ll1";
+  auto Opt = raw_fd_ostream(FileName, EC, sys::fs::CreationDisposition::CD_CreateAlways);
+
+
+  LKMMAnnotateDeps Ret;
+
+  {
+    auto A = LKMMSearchPolicy::LKMMAnnotator(CK_Annot, &annotateChain);
+    Ret.add(DepType::ADDR, A.run<DepType::ADDR>(M, AM));
+    Ret.add(DepType::DATA, A.run<DepType::DATA>(M, AM));
+    Ret.add(DepType::CTRL, A.run<DepType::CTRL>(M, AM));
+  }
+
+  Opt << M;
+  return Ret;
 }
 
 bool LKMMAnnotateDeps::invalidate(Module &, const PreservedAnalyses &PA,
@@ -1215,8 +1695,22 @@ PreservedAnalyses LKMMVerifyDepsPass::run(Module &M,
                                             ModuleAnalysisManager &AM) {
   auto &Annotations = AM.getResult<LKMMAnnotateDepsPass>(M);
   errs() << "\nvvvvv~~~~~~~~~ LKMMVerifyDepsPass ~~~~~vvvvv\n";
-  auto A = LKMMSearchPolicy::LKMMAnnotator(BUCtx::CtxKind::CK_Ver, &addChain, &Annotations);
-  verifyChain(Annotations.IntactDeps, A.run(M, AM));
+
+  auto EC = std::error_code();
+  auto Name = M.getModuleIdentifier();
+  std::replace(Name.begin(), Name.end(), '/', '_');
+  auto FileName = Prefix + "Mod_" + Name + ".ll2";
+  auto Opt = raw_fd_ostream(FileName, EC, sys::fs::CreationDisposition::CD_CreateAlways);
+
+  {
+    auto A = LKMMSearchPolicy::LKMMAnnotator(CK_Ver, &addChain, &Annotations);
+    verifyChain(Annotations.IntactDeps[(int)DepType::ADDR], A.run<DepType::ADDR>(M, AM), M);
+    verifyChain(Annotations.IntactDeps[(int)DepType::DATA], A.run<DepType::DATA>(M, AM), M);
+    verifyChain(Annotations.IntactDeps[(int)DepType::CTRL], A.run<DepType::CTRL>(M, AM), M);
+  }
+
+  Opt << M;
+
   errs() << "\n^^^^^~~~~~~~~~ LKMMVerifyDepsPass ~~~~~^^^^^\n";
 
   return PreservedAnalyses::all();
